@@ -44,7 +44,7 @@
 // running_time <= 3 * charging time
 
 // running time for train in seconds
-#define TR_RUNTIME	40
+#define TR_RUNTIME	50
 
 // train stop/charging time in seconds
 #define TR_CHARGE	20
@@ -52,7 +52,10 @@
 // change values below only if train is too slow/too fast
 
 // running maximum speed (1..7)
-#define TR_FULLSP	6
+#define TR_FULLSP	7
+
+// Search speed (recommended 4-6)
+#define TR_SRCSP		5
 
 // slow/locate charging pad speed
 #define TR_SLOWSP	2
@@ -70,20 +73,16 @@
  * (do not touch anything outside)
  ********************************************/
 
-// comment out if not in test
-//#define TRAINTEST
 
 
 // some values
 
-// battery low and ok values (~3.4V and ~4.1V)
-#define BATTLOW		710
+// battery low and ok values (~3.5V and ~4.1V)
+#define BATTLOW		720
 #define BATTFULL	840
 
 // speeds
 #define TR_STOP		0
-#define TR_HALF		4
-#define TR_BRAKE	8
 
 // max number of missed "LOCATE"
 #define MAXMISSED	5
@@ -166,7 +165,7 @@ void ircommand(int speed) {
 	int nibble4 = 0xf ^ nibble1 ^ nibble2 ^ nibble3;
 	unsigned int command = nibble1 << 12 | nibble2 << 8 | nibble3 << 4 | nibble4;
 	irsend.sendLegoPowerFunctions(command, false);
-	delay(10);
+	delay(20);
 	irsend.sendLegoPowerFunctions(command, false);
 }
 
@@ -187,7 +186,7 @@ void trainChangeSpeed(int ss, int es) {
 	}
 	for (int v=ss; v<es;v+=inc) {
 		ircommand(v);
-		delay(2000);
+		delay(800);
 	}
 }
 
@@ -204,15 +203,26 @@ void setup()
 
 	// set initial values
 	lastchange = millis();
-	vunload = analogRead(VBAT);
+	vunload = (analogRead(VBAT) + analogRead(VBAT)) / 2;
 	vu[0] = vu[1] = vu[2] = vu[3] = vunload;
 
-	// checks battery status before start running
-	status = ALARM;
 	strip.begin();
 
 	// ten seconds before train starts running
 	delay(10000);
+
+	// if is over Qi pad, do a full charge
+	if (digitalRead(VCHARGE) == HIGH) {
+		changeStatus(CHARGE_FULL);
+	}
+	else if (vunload > BATTLOW) {
+		changeStatus(RUN);
+		trainChangeSpeed(TR_STOP,TR_FULLSP);
+	}
+	else {
+		changeStatus(SEARCH);
+		trainChangeSpeed(TR_STOP,TR_SRCSP);
+	}
 }
 
 
@@ -274,7 +284,7 @@ void loop()
 		if (runtime > TR_RUNTIME*1000L) {
 			changeStatus(SEARCH);
 			// going to half speed, forward
-			trainChangeSpeed(TR_FULLSP, TR_HALF);
+			ircommand(TR_SRCSP);
 		}
 		break;
 	case SEARCH:
@@ -289,7 +299,7 @@ void loop()
 		}
 		break;
 	case LOCATE:
-		delay(90);
+		delay(80);
 		ircommand(TR_STOP);
 		delay(800);
 		vu[3] = vu[2];
@@ -298,15 +308,18 @@ void loop()
 		vu[0] = analogRead(VBAT);
 		vunload = (vu[0] + vu[1] + vu[2] + vu[3]) >> 2;
 		if (digitalRead(VCHARGE) == HIGH) {
-			// stop train
-			if (vunload < BATTLOW) {
-				changeStatus(CHARGE_FULL);
+			delay(843);
+			if (digitalRead(VCHARGE) == HIGH) {
+				// stop train
+				if (vunload < BATTLOW) {
+					changeStatus(CHARGE_FULL);
+				}
+				else {
+					changeStatus(CHARGE);
+				}
+				missedPad = 0;
+				ircommand(TR_STOP);
 			}
-			else {
-				changeStatus(CHARGE);
-			}
-			missedPad = 0;
-			ircommand(TR_STOP);
 		}
 		else if (runtime > TR_PADSRC*1000L) {
 			// missed charging pad, return to SEARCH
@@ -318,7 +331,7 @@ void loop()
 			else {
 				changeStatus(SEARCH);
 				// going to half speed, forward
-				trainChangeSpeed(TR_STOP, TR_HALF);
+				ircommand(TR_SRCSP);
 			}
 		}
 		else {
@@ -329,29 +342,12 @@ void loop()
 	case CHARGE:
 	case CHARGE_FULL:
 	case CHARGE_FULL2:
-		// if charge pad is not perfectly centered
-		if (digitalRead(VCHARGE) == LOW) {
-			ircommand(TR_SLOWSP);
-			delay(800);
-			ircommand(TR_STOP);
-			delay(3000);
-			if (digitalRead(VCHARGE) == LOW) {
-				changeStatus(RUN);
-				trainChangeSpeed(TR_STOP, TR_FULLSP);
-			}
-			else {
-				lastchange = millis();
-				runtime = 0;
-			}
+		if (status == CHARGE && runtime > TR_CHARGE*1000L) {
+			// start train at full speed
+			changeStatus(RUN);
+			trainChangeSpeed(TR_STOP,TR_FULLSP);
 		}
-		else if (status == CHARGE) {
-			if (runtime > TR_CHARGE*1000L) {
-				// start train at full speed
-				changeStatus(RUN);
-				trainChangeSpeed(TR_STOP, TR_FULLSP);
-			}
-		}
-		else if (status == CHARGE_FULL){
+		if (status == CHARGE_FULL){
 			int v = analogRead(VBAT);
 			if (v >= BATTFULL) {
 				changeStatus(CHARGE_FULL2);
@@ -359,18 +355,21 @@ void loop()
 		}
 		else if (runtime >= TIME_FULLCHARGE*1000L) {
 			changeStatus(RUN);
-			trainChangeSpeed(TR_STOP, TR_FULLSP);
+			trainChangeSpeed(TR_STOP,TR_FULLSP);
 		}
 		break;
 	case ALARM:
 		if (vunload > BATTLOW) {
 			changeStatus(RUN);
-			trainChangeSpeed(TR_HALF, TR_FULLSP);
+			ircommand(TR_FULLSP);
 		}
 		else {
-			changeStatus(SEARCH);
-			// going to half speed, forward
-			ircommand(TR_HALF);
+			if (digitalRead(VCHARGE) == HIGH) {
+				changeStatus(CHARGE_FULL);
+			}
+			else {
+				ircommand(TR_STOP);
+			}
 		}
 		break;
 	}
