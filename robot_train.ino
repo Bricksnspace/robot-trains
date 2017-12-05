@@ -41,7 +41,7 @@
 #define IRCHANNEL 	0
 
 // good ratio between running time and charging time is:
-// running_time <= 3 * charging time
+// running_time <= 2 * charging time
 
 // running time for train in seconds
 #define TR_RUNTIME	50
@@ -356,7 +356,7 @@ void loop()
 			battcheck = millis();
 			// time to verify battery
 			if (vunload < BATTLOW) {
-				if (charge_time < 2*TR_RUNTIME)
+				if (charge_time < 3*TR_CHARGE)
 				charge_time += CHARGE_INCREMENT;
 			}
 			else if (vunload > BATTHIGH) {
